@@ -1,0 +1,78 @@
+---
+title: "Part4_Interpretation"
+author: "Quincey Niu"
+date: "2023-04-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+## Load packages
+```{r}
+library(tidyverse)
+library(caret)
+library(rstanarm)
+```
+## Read data
+```{r}
+df <- readr::read_csv("paint_project_train_data.csv", col_names = TRUE)
+```
+```{r}
+df_all <- df %>% 
+  mutate(y = boot::logit( (response - 0) / (100 - 0) ) ) %>% 
+  select(R, G, B, 
+         Lightness, Saturation, Hue,
+         y)
+
+df_all %>% glimpse()
+```
+```{r}
+reg_mod <- readr::read_rds('my_best_reg_model.rds')
+cls_mod <- readr::read_rds('my_best_cls_model.rds')
+```
+
+
+Identify the most important variables associated with your best performing models.
+R, Saturation
+
+Visualize the predicted logit-transformed response as a function of your identified most important
+```{r}
+df_all %>% ggplot(mapping = aes(x = R, y = y)) +
+  geom_point() + 
+  geom_smooth()
+```
+```{r}
+df_all %>% ggplot(mapping = aes(x = Saturation, y = y)) +
+  geom_point() + 
+  geom_smooth()
+```
+
+## Best model
+```{r}
+caret::varImp(reg_mod)
+```
+```{r}
+caret::varImp(cls_mod)
+```
+
+```{r}
+ctrl_roc <- trainControl(method = "repeatedcv",
+                         number = 5,
+                         repeats = 3,
+                         summaryFunction = twoClassSummary,
+                         classProbs = TRUE,
+                         savePredictions = TRUE)
+
+metric_roc <- "ROC"
+```
+
+```{r}
+my_ctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 3)
+
+my_metric <- "RMSE"
+```
+

@@ -1,0 +1,443 @@
+---
+title: "Part3_Classification"
+author: "Quincey Niu"
+date: "2023-04-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+## Load packages
+```{r}
+library(tidyverse)
+library(rstanarm)
+library(caret)
+```
+
+## Read data
+```{r}
+df <- readr::read_csv("paint_project_train_data.csv", col_names = TRUE)
+```
+```{r}
+df %>% pull(outcome) %>% class()
+```
+```{r}
+df %>% count(outcome)
+```
+```{r}
+dfiiiA <- df %>% 
+  select(-response)
+
+dfiiiA %>% glimpse()
+```
+```{r}
+ctrl_roc <- trainControl(method = "repeatedcv",
+                         number = 5,
+                         repeats = 3,
+                         summaryFunction = twoClassSummary,
+                         classProbs = TRUE,
+                         savePredictions = TRUE)
+
+metric_roc <- "ROC"
+```
+
+
+## Fitting models using glm()
+
+Intercept-only model
+```{r}
+mod1 <- glm(outcome ~ 1, data = dfiiiA, family = binomial())
+summary(mod1)
+```
+
+Categorical variables only - linear additive
+```{r}
+mod2 <- glm(outcome ~ Lightness + Saturation, data = dfiiiA, family = binomial())
+summary(mod2)
+```
+
+Continuous variables only - linear additive
+```{r}
+mod3 <- glm(outcome ~ R + G + B + Hue, data = dfiiiA, family = binomial())
+summary(mod3)
+
+```
+
+All categorical and continuous variables - linear additive
+```{r}
+mod4 <- glm(outcome ~ R + G + B + Lightness + Saturation + Hue, data = dfiiiA, family = binomial())
+summary(mod4)
+```
+
+Interaction of categorical inputs with all continuous inputs main effects
+```{r}
+mod5 <- glm(outcome ~ Lightness:R + Lightness:G + Lightness:B + Saturation:R + Saturation:G + Saturation:B + Hue:R + Hue:G + Hue:B, data = dfiiiA, family = binomial())
+summary(mod5)
+```
+
+Add categorical inputs to all main effect and all pairwise interactions of continuous inputs
+```{r}
+mod6 <- glm(outcome ~ R + G + B + Lightness + Saturation + Hue + R:Lightness + R:Saturation + R:Hue + G:Lightness + G:Saturation + G:Hue + B:Lightness + B:Saturation + B:Hue, data = dfiiiA, family = binomial())
+summary(mod6)
+```
+
+Interaction of the categorical inputs with all main effect and all pairwise interactions of continuous inputs
+```{r}
+mod7 <- glm(outcome ~ Lightness + Saturation + Hue + Lightness:R + Lightness:G + Lightness:B + Saturation:R + Saturation:G + Saturation:B + Hue:R + Hue:G + Hue:B, data = dfiiiA, family = binomial())
+summary(mod7)
+```
+
+### Model with basis functions of your choice
+I will use splines as basis functions with different degrees of freedom (df).
+```{r}
+library(splines)
+
+# using cubic spline basis function for R variable
+mod8 <- glm(outcome ~ ns(R, df = 4) + G + B + Lightness + Saturation + Hue, data = dfiiiA, family = binomial())
+summary(mod8)
+
+# using exponential transformation for G variable
+mod9 <- glm(outcome ~ R + exp(G) + B + Lightness + Saturation + Hue, data = dfiiiA, family = binomial())
+summary(mod9)
+
+# using interaction between cubic spline basis function for R variable and Saturation variable
+mod10 <- glm(outcome ~ ns(R, df = 4) + G + B + Lightness + Saturation + Hue + ns(R, df = 4):Saturation, data = dfiiiA, family = binomial())
+summary(mod10)
+
+```
+
+```{r}
+p1 <- broom::glance(mod1)
+p2 <- broom::glance(mod2)
+p3 <- broom::glance(mod3)
+p4 <- broom::glance(mod4)
+p5 <- broom::glance(mod5)
+p6 <- broom::glance(mod6)
+p7 <- broom::glance(mod7)
+p8 <- broom::glance(mod8)
+p9 <- broom::glance(mod9)
+p10 <- broom::glance(mod10)
+rbind(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10)
+```
+Mod10 is the best model, because it has the highest BIC value.   
+
+```{r}
+coefplot::coefplot(mod10)
+coefplot::coefplot(mod7)
+coefplot::coefplot(mod6)
+```
+
+## Bayesian models
+best model
+```{r}
+set.seed(432123)
+mod7_bayesian <- stan_glm(outcome ~ Lightness + Saturation + Hue + Lightness:R + Lightness:G + Lightness:B + Saturation:R + Saturation:G + Saturation:B + Hue:R + Hue:G + Hue:B, data = dfiiiA)
+```
+```{r}
+mod7_bayesian %>% summary()
+```
+```{r}
+posterior_interval(mod7_bayesian)
+```
+```{r}
+rstanarm::bayes_R2(mod7_bayesian) %>% quantile(c(0.05, 0.5, 0.95))
+```
+```{r}
+plot(mod7_bayesian, pars = names(mod7_bayesian$coefficients)) + 
+  geom_vline(xintercept = 0, color = "grey", linetype = "dashed", size = 1.) +
+  theme_bw()
+```
+```{r}
+purrr::map2_dfr(list(mod7_bayesian),
+                as.character(1),
+                function(mod, mod_name){as.data.frame(mod) %>% tibble::as_tibble() %>% 
+                    select(sigma) %>% 
+                    mutate(model_name = mod_name)}) %>% 
+  ggplot(mapping = aes(x = sigma)) +
+  geom_freqpoly(bins = 55,
+                 mapping = aes(color = model_name),
+                 size = 1.1) +
+  ggthemes::scale_color_colorblind("Model") +
+  theme_bw()
+```
+The sigma is known and is almost normally distributed with a peak at 0.35.   
+
+## Second best model
+
+```{r}
+set.seed(432123)
+mod10_bayesian <- stan_glm(outcome ~ ns(R, df = 4) + G + B + Lightness + Saturation + Hue + ns(R, df = 4):Saturation,
+                 data = dfiiiA)
+```
+```{r}
+mod10_bayesian %>% summary()
+```
+```{r}
+posterior_interval(mod10_bayesian)
+```
+```{r}
+rstanarm::bayes_R2(mod10_bayesian) %>% quantile(c(0.05, 0.5, 0.95))
+```
+```{r}
+plot(mod10_bayesian, pars = names(mod10_bayesian$coefficients)) + 
+  geom_vline(xintercept = 0, color = "grey", linetype = "dashed", size = 1.) +
+  theme_bw()
+```
+```{r}
+purrr::map2_dfr(list(mod10_bayesian),
+                as.character(1),
+                function(mod, mod_name){as.data.frame(mod) %>% tibble::as_tibble() %>% 
+                    select(sigma) %>% 
+                    mutate(model_name = mod_name)}) %>% 
+  ggplot(mapping = aes(x = sigma)) +
+  geom_freqpoly(bins = 55,
+                 mapping = aes(color = model_name),
+                 size = 1.1) +
+  ggthemes::scale_color_colorblind("Model") +
+  theme_bw()
+```
+The sigma is known and is almost normally distributed with a peak at 0.36.
+```{r}
+dfiiiD <- df %>% 
+  select(-response) %>% 
+  mutate(outcome = ifelse(outcome == 1, 'event', 'non_event'),
+         outcome = factor(outcome, levels = c('event', 'non_event')))
+
+dfiiiD %>% glimpse()
+```
+```{r}
+dfiiiD %>% pull(outcome) %>% levels()
+```
+```{r}
+dfiiiD %>% count(outcome)
+```
+
+linear additive features
+```{r}
+set.seed(1024)
+
+fit_lm_add <- train(outcome ~ Lightness + Saturation + Hue,
+                  data = dfiiiD,
+                  method = "glmnet",
+                  metric = metric_roc,
+                  trControl = ctrl_roc,
+                  preProcess = c("center", "scale"),
+                  family = "binomial")
+
+fit_lm_add
+```
+All categorical and continuous variables - linear additive
+```{r}
+set.seed(1024)
+
+fit_lm_add_der <- train(outcome ~ R + G + B + Lightness + Saturation + Hue,
+                  data = dfiiiD,
+                  method = "glmnet",
+                  metric = metric_roc,
+                  trControl = ctrl_roc,
+                  preProcess = c("center", "scale"),
+                  family = "binomial")
+
+fit_lm_add_der
+```
+All pairwise interactions of continuous inputs
+```{r}
+set.seed(1024)
+
+fit_lm_pair <- train(outcome ~ R + G + B + Lightness + Saturation + Hue + R:Lightness + R:Saturation + R:Hue + G:Lightness + G:Saturation + G:Hue + B:Lightness + B:Saturation + B:Hue,
+                  data = dfiiiD,
+                  method = "glmnet",
+                  metric = metric_roc,
+                  trControl = ctrl_roc,
+                  preProcess = c("center", "scale"),
+                  family = "binomial")
+
+fit_lm_pair
+```
+Mod10 from 3A
+```{r}
+set.seed(1024)
+
+fit_lm_3a <- train(outcome ~ Lightness + Saturation + Hue + Lightness:R + Lightness:G + Lightness:B + Saturation:R + Saturation:G + Saturation:B + Hue:R + Hue:G + Hue:B,
+                  data = dfiiiD,
+                  method = "glmnet",
+                  metric = metric_roc,
+                  trControl = ctrl_roc,
+                  preProcess = c("center", "scale"),
+                  family = "binomial")
+
+fit_lm_3a
+```
+Elastic net all pairwise
+```{r}
+set.seed(1024)
+fit_enet_pair <- train(
+  outcome ~ R + G + B + Lightness + Saturation + Hue + R:Lightness + R:Saturation + R:Hue + G:Lightness + G:Saturation + G:Hue + B:Lightness + B:Saturation + B:Hue,
+  data = dfiiiD,
+  method = "glmnet",
+  metric = metric_roc,
+  trControl = ctrl_roc,
+  family = "binomial",
+  preProcess = c('center', 'scale')
+)
+fit_enet_pair
+```
+Elastic net 3a
+```{r}
+set.seed(1024)
+fit_enet_3a <- train(
+  outcome ~  Lightness + Saturation + Hue + Lightness:R + Lightness:G + Lightness:B + Saturation:R + Saturation:G + Saturation:B + Hue:R + Hue:G + Hue:B,
+  data = dfiiiD,
+  method = "glmnet",
+  metric = metric_roc,
+  trControl = ctrl_roc,
+  family = "binomial",
+  preProcess = c('center', 'scale')
+)
+fit_enet_3a
+```
+Neural network base
+```{r}
+set.seed(1024)
+fit_cls_nnet_b <- train(
+  outcome ~ Lightness + Saturation + Hue,
+  data = dfiiiD,
+  method = "nnet",
+  metric = metric_roc,
+  trControl = ctrl_roc,
+  family = "binomial",
+  preProcess = c('center', 'scale')
+)
+fit_cls_nnet_b
+```
+Neural net derived
+```{r}
+set.seed(1024)
+fit_cls_nnet_d <- train(
+  outcome ~ R + G + B + Lightness + Saturation + Hue,
+  data = dfiiiD,
+  method = "nnet",
+  metric = metric_roc,
+  trControl = ctrl_roc,
+  family = "binomial",
+  preProcess = c('center', 'scale')
+)
+fit_cls_nnet_d
+```
+Random forest base
+```{r}
+set.seed(1024)
+
+fit_cls_rf_b <- train(outcome ~ Lightness + Saturation + Hue,
+                 data = dfiiiD,
+                 method = "rf",
+                 metric = metric_roc,
+                 trControl = ctrl_roc,
+                 family = "binomial",
+                 preProcess = c('center', 'scale'),
+                 importance = TRUE
+                 )
+
+fit_cls_rf_b
+```
+Random forest derived
+```{r}
+set.seed(1024)
+
+fit_cls_rf_d <- train(outcome ~ R + G + B + Lightness + Saturation + Hue,
+                 data = dfiiiD,
+                 method = "rf",
+                 metric = metric_roc,
+                 trControl = ctrl_roc,
+                 family = "binomial",
+                 preProcess = c('center', 'scale'),
+                 importance = TRUE
+                 )
+
+fit_cls_rf_d
+```
+XGB base
+```{r}
+set.seed(1024)
+
+fit_cls_xgb_b <- train(outcome ~ Lightness + Saturation + Hue,
+                 data = dfiiiD,
+                 method = "xgbTree",
+                 metric = metric_roc,
+                 trControl = ctrl_roc,
+                 family = "binomial",
+                 preProcess = c('center', 'scale'),
+                 verbosity = 0)
+
+fit_cls_xgb_b
+```
+XGB derived
+```{r}
+set.seed(1024)
+
+fit_cls_xgb_d <- train(outcome ~ R + G + B + Lightness + Saturation + Hue,
+                 data = dfiiiD,
+                 method = "xgbTree",
+                 metric = metric_roc,
+                 trControl = ctrl_roc,
+                 family = "binomial",
+                 preProcess = c('center', 'scale'),
+                 verbosity = 0)
+
+fit_cls_xgb_d
+```
+SVM
+```{r}
+set.seed(1024)
+
+fit_cls_svm <- train(outcome ~ Lightness + Saturation + Hue,
+                 data = dfiiiD,
+                 method = "svmRadial",
+                 metric = metric_roc,
+                 trControl = ctrl_roc,
+                 family = "binomial",
+                 preProcess = c('center', 'scale')
+                 )
+
+fit_cls_svm
+```
+## Comparision
+```{r}
+my_results <- resamples(list(LM_b = fit_lm_add,
+                             LM_d = fit_lm_add_der,
+                             LM_p = fit_lm_pair,
+                             LM_3a = fit_lm_3a,
+                             
+                             ENET_3a = fit_enet_3a,
+                             ENET_pair = fit_enet_pair,
+
+                             SVM = fit_cls_svm,
+                             
+                             NNET_b = fit_cls_nnet_b,
+                             NNET_d = fit_cls_nnet_d,
+                             
+                             RF_b = fit_cls_rf_b,
+                             RF_d = fit_cls_rf_d,
+                             
+                             XGB_b = fit_cls_xgb_b,
+                             XGB_d = fit_cls_xgb_d))
+
+```
+```{r}
+dotplot(my_results, metric = "ROC")
+```
+
+
+## Variable importance
+```{r}
+varImp(fit_cls_xgb_d)
+```
+
+```{r}
+fit_cls_xgb_d %>% readr::write_rds('my_best_cls_model.rds')
+```
+
